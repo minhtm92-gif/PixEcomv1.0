@@ -1,0 +1,3 @@
+import { getJson } from '@/lib/api';
+const fmt=(c:number)=>`$${(c/100).toFixed(2)}`;
+export default async function AdContent({params}:{params:{id:string}}){const list=await getJson(`/creatives?productId=${params.id}`);return <div className="space-y-4"><h2 className="text-xl">Product Ad Content</h2><div className="flex gap-2"><button className="btn">Product Pages</button><button className="btn bg-slate-700">Ad Content</button></div><div className="grid grid-cols-3 gap-3">{list.map((c:any)=><div key={c.id} className="card p-3"><div className="text-xs text-slate-400">{c.type}</div><div className="font-medium">Version {c.version}</div><div>Spent {fmt(c.spentCents)} | ROAS {c.roas}</div><a className="text-blue-400" href="#">Details</a></div>)}</div></div>}

@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role { ADMIN LEADER MEDIA VIEWER }
+enum Status { ACTIVE PAUSED ARCHIVED }
+enum AssetType { VIDEO IMAGE THUMBNAIL ADTEXT ADPOST }
+enum DraftSource { EXISTING_POST CONTENT_SOURCE }
+
+model Merchant {
+  id        String    @id @default(cuid())
+  name      String
+  users     User[]
+  products  Product[]
+  sellpages Sellpage[]
+  adAccounts AdAccount[]
+  campaigns Campaign[]
+  adSets    AdSet[]
+  ads       Ad[]
+  drafts    AdCreationDraft[]
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  merchantId   String
+  merchant     Merchant @relation(fields: [merchantId], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model Product {
+  id         String @id @default(cuid())
+  code       String
+  name       String
+  status     Status @default(ACTIVE)
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  creatives  CreativeAsset[]
+  sellpages  Sellpage[]
+}
+
+model Sellpage {
+  id         String @id @default(cuid())
+  slug       String
+  domain     String
+  status     Status @default(ACTIVE)
+  config     Json?
+  productId  String
+  product    Product @relation(fields: [productId], references: [id])
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  orders     Order[]
+}
+
+model Order {
+  id         String @id @default(cuid())
+  sellpageId String
+  sellpage   Sellpage @relation(fields: [sellpageId], references: [id])
+  source     String
+  revenueCents Int
+  createdAt  DateTime @default(now())
+}
+
+model CreativeAsset {
+  id          String @id @default(cuid())
+  type        AssetType
+  version     String
+  url         String
+  preview     String?
+  textContent String?
+  spentCents  Int @default(0)
+  roas        Float @default(0)
+  cpm         Float @default(0)
+  ctr         Float @default(0)
+  productId   String
+  product     Product @relation(fields: [productId], references: [id])
+}
+
+model AdAccount {
+  id          String @id @default(cuid())
+  platformId  String
+  name        String
+  currency    String
+  timezone    String
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+}
+
+model Campaign {
+  id          String @id @default(cuid())
+  platformId  String
+  name        String
+  status      Status
+  deliveryStatus String @default("Active")
+  dailyBudgetCents Int
+  spendCents  Int
+  startDate   DateTime
+  objective   String
+  aiAssistant Boolean @default(false)
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  adAccountId String
+  adAccount   AdAccount @relation(fields: [adAccountId], references: [id])
+  lastSyncAt  DateTime?
+  adSets      AdSet[]
+}
+
+model AdSet {
+  id          String @id @default(cuid())
+  platformId  String
+  name        String
+  status      Status
+  deliveryStatus String @default("Active")
+  budgetCents Int
+  spendCents  Int
+  targeting   Json?
+  aiAssistant Boolean @default(false)
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+  ads         Ad[]
+}
+
+model Ad {
+  id          String @id @default(cuid())
+  platformId  String
+  name        String
+  status      Status
+  deliveryStatus String @default("Active")
+  spendCents  Int
+  metrics     Json?
+  aiAssistant Boolean @default(false)
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  adSetId     String
+  adSet       AdSet @relation(fields: [adSetId], references: [id])
+  creativeAssetId String?
+}
+
+model AdCreationDraft {
+  id          String @id @default(cuid())
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  strategy    String
+  sellpageId  String?
+  adAccountId String?
+  budgetCents Int?
+  audience    String?
+  sourceType  DraftSource?
+  payload     Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
