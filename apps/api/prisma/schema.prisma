@@ -13,6 +13,7 @@ enum AssetType { VIDEO IMAGE THUMBNAIL ADTEXT ADPOST }
 enum DraftSource { EXISTING_POST CONTENT_SOURCE }
 enum EntityType { CAMPAIGN ADSET AD }
 enum BudgetSourceUnit { MAJOR MINOR }
+enum PaymentStatus { PENDING PAID FAILED }
 
 model Merchant {
   id         String    @id @default(cuid())
@@ -26,6 +27,7 @@ model Merchant {
   ads        Ad[]
   drafts     AdCreationDraft[]
   syncRuns   SyncRun[]
+  sessions   Session[]
   createdAt  DateTime @default(now())
 }
 
@@ -53,7 +55,7 @@ model Product {
 
 model Sellpage {
   id         String @id @default(cuid())
-  slug       String
+  slug       String @unique
   domain     String
   status     Status @default(ACTIVE)
   config     Json?
@@ -61,16 +63,72 @@ model Sellpage {
   product    Product @relation(fields: [productId], references: [id])
   merchantId String
   merchant   Merchant @relation(fields: [merchantId], references: [id])
+  sessions   Session[]
+  pageViews  PageView[]
   orders     Order[]
+  campaigns  Campaign[]
+}
+
+model Session {
+  id         String @id @default(cuid())
+  sessionKey String @unique
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  sellpageId String?
+  sellpage   Sellpage? @relation(fields: [sellpageId], references: [id])
+  utmSource  String?
+  utmMedium  String?
+  utmCampaign String?
+  utmContent String?
+  utmTerm    String?
+  fbclid     String?
+  gclid      String?
+  pageViews  PageView[]
+  orders     Order[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model PageView {
+  id         String @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id])
+  sellpageId String
+  sellpage   Sellpage @relation(fields: [sellpageId], references: [id])
+  sessionId  String
+  session    Session @relation(fields: [sessionId], references: [id])
+  path       String
+  createdAt  DateTime @default(now())
 }
 
 model Order {
-  id          String   @id @default(cuid())
+  id          String @id @default(cuid())
+  merchantId  String
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
   sellpageId  String
   sellpage    Sellpage @relation(fields: [sellpageId], references: [id])
-  source      String
-  revenueCents Int
+  sessionId   String
+  session     Session @relation(fields: [sessionId], references: [id])
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  utmTerm     String?
+  fbclid      String?
+  gclid       String?
+  totalsCents Int
+  paymentStatus PaymentStatus @default(PENDING)
+  items       OrderItem[]
   createdAt   DateTime @default(now())
+}
+
+model OrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  order     Order @relation(fields: [orderId], references: [id])
+  productId String
+  quantity  Int
+  priceCents Int
 }
 
 model CreativeAsset {
@@ -96,6 +154,9 @@ model AdAccount {
   timezone   String
   merchantId String
   merchant   Merchant @relation(fields: [merchantId], references: [id])
+  campaigns  Campaign[]
+
+  @@unique([merchantId, platformId])
 }
 
 model Campaign {
@@ -107,7 +168,6 @@ model Campaign {
   deliveryStatus   String @default("Active")
   dailyBudgetCents Int
   budgetSourceUnit BudgetSourceUnit @default(MINOR)
-  spendCents       Int
   startDate        DateTime
   objective        String
   aiAssistant      Boolean @default(false)
@@ -115,11 +175,14 @@ model Campaign {
   merchant         Merchant @relation(fields: [merchantId], references: [id])
   adAccountId      String
   adAccount        AdAccount @relation(fields: [adAccountId], references: [id])
+  sellpageId       String?
+  sellpage         Sellpage? @relation(fields: [sellpageId], references: [id])
   lastSyncAt       DateTime?
   lastSeenSyncRunId String?
   hidden           Boolean @default(false)
   adSets           AdSet[]
 
+  @@unique([merchantId, platformId])
   @@index([platformId])
 }
 
@@ -131,7 +194,6 @@ model AdSet {
   effectiveStatus  Status
   deliveryStatus   String @default("Active")
   budgetCents      Int
-  spendCents       Int
   targeting        Json?
   aiAssistant      Boolean @default(false)
   merchantId       String
@@ -141,6 +203,8 @@ model AdSet {
   lastSeenSyncRunId String?
   hidden           Boolean @default(false)
   ads              Ad[]
+
+  @@unique([merchantId, platformId])
 }
 
 model Ad {
@@ -150,7 +214,6 @@ model Ad {
   configuredStatus Status
   effectiveStatus  Status
   deliveryStatus   String @default("Active")
-  spendCents       Int
   metrics          Json?
   aiAssistant      Boolean @default(false)
   merchantId       String
@@ -160,13 +223,15 @@ model Ad {
   creativeAssetId  String?
   lastSeenSyncRunId String?
   hidden           Boolean @default(false)
+
+  @@unique([merchantId, platformId])
 }
 
 model MetricsDaily {
   id         String @id @default(cuid())
   entityType EntityType
   platformId String
-  metricDate DateTime
+  dateLocal  DateTime
   timezone   String
   spendCents Int
   impressions Int @default(0)
@@ -175,8 +240,8 @@ model MetricsDaily {
   cpm        Float @default(0)
   ctr        Float @default(0)
 
-  @@unique([entityType, platformId, metricDate, timezone])
-  @@index([entityType, platformId, metricDate])
+  @@unique([entityType, platformId, dateLocal, timezone])
+  @@index([entityType, platformId, dateLocal])
 }
 
 model SyncRun {

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, UnauthorizedException
 import { PrismaService } from './prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcryptjs';
-import { BudgetSourceUnit, DraftSource, EntityType , Status } from '@prisma/client';
+import { BudgetSourceUnit, DraftSource, EntityType, PaymentStatus, Status } from '@prisma/client';
 import { normalizeBudgetToCents, validateUniquePlatforms } from './ads-manager.logic';
 
 @Controller()
@@ -43,12 +43,115 @@ export class AppController {
   @Get('sellpages/:id')
   sellpage(@Param('id') id: string) { return this.prisma.sellpage.findUnique({ where: { id }, include: { product: true } }); }
 
+  @Post('tracking/session')
+  async upsertSession(@Body() body: any) {
+    const sellpage = await this.prisma.sellpage.findUniqueOrThrow({ where: { slug: body.slug } });
+    return this.prisma.session.upsert({
+      where: { sessionKey: body.sessionKey },
+      create: {
+        sessionKey: body.sessionKey,
+        merchantId: sellpage.merchantId,
+        sellpageId: sellpage.id,
+        utmSource: body.utmSource,
+        utmMedium: body.utmMedium,
+        utmCampaign: body.utmCampaign,
+        utmContent: body.utmContent,
+        utmTerm: body.utmTerm,
+        fbclid: body.fbclid,
+        gclid: body.gclid
+      },
+      update: {
+        sellpageId: sellpage.id,
+        utmSource: body.utmSource,
+        utmMedium: body.utmMedium,
+        utmCampaign: body.utmCampaign,
+        utmContent: body.utmContent,
+        utmTerm: body.utmTerm,
+        fbclid: body.fbclid,
+        gclid: body.gclid
+      }
+    });
+  }
+
+  @Post('tracking/pageview')
+  async createPageView(@Body() body: { sessionKey: string; slug: string; path?: string }) {
+    const session = await this.prisma.session.findUniqueOrThrow({ where: { sessionKey: body.sessionKey } });
+    const sellpage = await this.prisma.sellpage.findUniqueOrThrow({ where: { slug: body.slug } });
+    return this.prisma.pageView.create({
+      data: {
+        merchantId: sellpage.merchantId,
+        sellpageId: sellpage.id,
+        sessionId: session.id,
+        path: body.path || `/p/${body.slug}`
+      }
+    });
+  }
+
+  @Post('checkout/submit')
+  async checkout(@Body() body: { sessionKey: string; sellpageId: string; items: Array<{ productId: string; quantity: number; priceCents: number }> }) {
+    const session = await this.prisma.session.findUniqueOrThrow({ where: { sessionKey: body.sessionKey } });
+    const total = body.items.reduce((sum, i) => sum + i.priceCents * i.quantity, 0);
+
+    const order = await this.prisma.order.create({
+      data: {
+        merchantId: session.merchantId,
+        sellpageId: body.sellpageId,
+        sessionId: session.id,
+        utmSource: session.utmSource,
+        utmMedium: session.utmMedium,
+        utmCampaign: session.utmCampaign,
+        utmContent: session.utmContent,
+        utmTerm: session.utmTerm,
+        fbclid: session.fbclid,
+        gclid: session.gclid,
+        totalsCents: total,
+        paymentStatus: PaymentStatus.PENDING,
+        items: { create: body.items }
+      }
+    });
+
+    return order;
+  }
+
+  @Patch('checkout/payment-update/:orderId')
+  updatePayment(@Param('orderId') orderId: string, @Body() body: { paymentStatus: PaymentStatus }) {
+    return this.prisma.order.update({ where: { id: orderId }, data: { paymentStatus: body.paymentStatus } });
+  }
+
   @Get('sellpages/:id/metrics')
-  async sellpageMetrics(@Param('id') id: string) {
-    const orders = await this.prisma.order.findMany({ where: { sellpageId: id } });
-    const revenue = orders.reduce((a, o) => a + o.revenueCents, 0);
-    const spend = 50000;
-    return { views: 12456, orders: orders.length, revenueCents: revenue, spendCents: spend, roas: revenue / Math.max(spend, 1) };
+  async sellpageMetrics(@Param('id') id: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const sellpage = await this.prisma.sellpage.findUniqueOrThrow({ where: { id } });
+    const account = await this.prisma.adAccount.findFirstOrThrow({ where: { merchantId: sellpage.merchantId } });
+
+    const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 86400000);
+    const toDate = to ? new Date(to) : new Date();
+
+    const views = await this.prisma.pageView.count({ where: { sellpageId: id, createdAt: { gte: fromDate, lte: toDate } } });
+    const paidOrders = await this.prisma.order.findMany({
+      where: { sellpageId: id, paymentStatus: PaymentStatus.PAID, createdAt: { gte: fromDate, lte: toDate } }
+    });
+
+    const revenueCents = paidOrders.reduce((sum, o) => sum + o.totalsCents, 0);
+    const ordersCount = paidOrders.length;
+
+    const linkedCampaigns = await this.prisma.campaign.findMany({ where: { sellpageId: id, hidden: false } });
+    const campaignPlatformIds = linkedCampaigns.map((c) => c.platformId);
+
+    const spendAgg = await this.prisma.metricsDaily.aggregate({
+      where: {
+        entityType: EntityType.CAMPAIGN,
+        platformId: { in: campaignPlatformIds.length ? campaignPlatformIds : ['__none__'] },
+        timezone: account.timezone,
+        dateLocal: { gte: fromDate, lte: toDate }
+      },
+      _sum: { spendCents: true }
+    });
+
+    const spendCents = spendAgg._sum.spendCents ?? 0;
+    const roas = spendCents > 0 ? revenueCents / spendCents : 0;
+    const cvr = views > 0 ? ordersCount / views : 0;
+
+    return { views, orders: ordersCount, revenueCents, spendCents, roas, cvr, timezone: account.timezone };
   }
 
   @Get('creatives')
@@ -62,51 +165,50 @@ export class AppController {
   @Post('integrations/facebook/sync')
   async sync() {
     const merchant = await this.prisma.merchant.findFirstOrThrow();
-    const account = await this.prisma.adAccount.findFirstOrThrow();
+    const account = await this.prisma.adAccount.findFirstOrThrow({ where: { merchantId: merchant.id } });
+    const sellpage = await this.prisma.sellpage.findFirstOrThrow({ where: { merchantId: merchant.id } });
     const syncRun = await this.prisma.syncRun.create({ data: { merchantId: merchant.id, source: 'facebook', status: 'running' } });
 
-    const fbCampaigns = [
+    const insightsCampaign = [
       { platformId: 'cmp_1', name: 'Campaign 1', configuredStatus: Status.ACTIVE, effectiveStatus: Status.ACTIVE, deliveryStatus: 'Active', budget: 80, budgetUnit: 'MAJOR' as BudgetSourceUnit, spend: 2300 },
       { platformId: 'cmp_2', name: 'Campaign 2', configuredStatus: Status.PAUSED, effectiveStatus: Status.PAUSED, deliveryStatus: 'Inactive', budget: 8000, budgetUnit: 'MINOR' as BudgetSourceUnit, spend: 0 },
       { platformId: 'cmp_3', name: 'Campaign 3', configuredStatus: Status.ACTIVE, effectiveStatus: Status.ACTIVE, deliveryStatus: 'Active', budget: 120, budgetUnit: 'MAJOR' as BudgetSourceUnit, spend: 5100 }
     ];
 
     const seenCampaignPlatforms = new Set<string>();
-    const metricDate = new Date();
-    metricDate.setUTCHours(0, 0, 0, 0);
+    const dateLocal = new Date();
+    dateLocal.setUTCHours(0, 0, 0, 0);
 
-    for (const fb of fbCampaigns) {
-      seenCampaignPlatforms.add(fb.platformId);
-      const budget = normalizeBudgetToCents(fb.budget, fb.budgetUnit);
+    for (const item of insightsCampaign) {
+      seenCampaignPlatforms.add(item.platformId);
+      const budget = normalizeBudgetToCents(item.budget, item.budgetUnit);
 
       await this.prisma.campaign.upsert({
-        where: { id: `sync_${fb.platformId}_${merchant.id}` },
+        where: { merchantId_platformId: { merchantId: merchant.id, platformId: item.platformId } },
         create: {
-          id: `sync_${fb.platformId}_${merchant.id}`,
-          platformId: fb.platformId,
-          name: fb.name,
-          configuredStatus: fb.configuredStatus,
-          effectiveStatus: fb.effectiveStatus,
-          deliveryStatus: fb.deliveryStatus,
+          platformId: item.platformId,
+          name: item.name,
+          configuredStatus: item.configuredStatus,
+          effectiveStatus: item.effectiveStatus,
+          deliveryStatus: item.deliveryStatus,
           dailyBudgetCents: budget.cents,
           budgetSourceUnit: budget.unit,
-          spendCents: fb.spend,
           startDate: new Date(),
           objective: 'Conversions',
           merchantId: merchant.id,
           adAccountId: account.id,
+          sellpageId: sellpage.id,
           lastSyncAt: new Date(),
           lastSeenSyncRunId: syncRun.id,
           hidden: false
         },
         update: {
-          name: fb.name,
-          configuredStatus: fb.configuredStatus,
-          effectiveStatus: fb.effectiveStatus,
-          deliveryStatus: fb.deliveryStatus,
+          name: item.name,
+          configuredStatus: item.configuredStatus,
+          effectiveStatus: item.effectiveStatus,
+          deliveryStatus: item.deliveryStatus,
           dailyBudgetCents: budget.cents,
           budgetSourceUnit: budget.unit,
-          spendCents: fb.spend,
           lastSyncAt: new Date(),
           lastSeenSyncRunId: syncRun.id,
           hidden: false
@@ -115,26 +217,26 @@ export class AppController {
 
       await this.prisma.metricsDaily.upsert({
         where: {
-          entityType_platformId_metricDate_timezone: {
+          entityType_platformId_dateLocal_timezone: {
             entityType: EntityType.CAMPAIGN,
-            platformId: fb.platformId,
-            metricDate,
+            platformId: item.platformId,
+            dateLocal,
             timezone: account.timezone
           }
         },
         create: {
           entityType: EntityType.CAMPAIGN,
-          platformId: fb.platformId,
-          metricDate,
+          platformId: item.platformId,
+          dateLocal,
           timezone: account.timezone,
-          spendCents: fb.spend,
+          spendCents: item.spend,
           impressions: 10000,
           clicks: 240,
           roas: 2.1,
           cpm: 8.2,
           ctr: 2.4
         },
-        update: { spendCents: fb.spend, roas: 2.1, cpm: 8.2, ctr: 2.4 }
+        update: { spendCents: item.spend }
       });
     }
 
@@ -144,57 +246,54 @@ export class AppController {
     });
 
     await this.prisma.syncRun.update({ where: { id: syncRun.id }, data: { status: 'success', finishedAt: new Date() } });
-
-    return { message: 'sync complete', syncRunId: syncRun.id, seenCampaigns: [...seenCampaignPlatforms] };
+    return { message: 'sync complete', syncRunId: syncRun.id };
   }
 
   @Patch('ads-manager/campaigns/:id/configured-status')
-  async updateConfiguredStatus(@Param('id') id: string, @Body() body: { configuredStatus: Status }) {
+  updateConfiguredStatus(@Param('id') id: string, @Body() body: { configuredStatus: Status }) {
     return this.prisma.campaign.update({ where: { id }, data: { configuredStatus: body.configuredStatus } });
   }
 
   @Get('ads-manager/campaigns')
-  async campaigns(@Query('status') status?: Status) {
+  async campaigns(@Query('status') status?: Status, @Query('from') from?: string, @Query('to') to?: string) {
     const rows = await this.prisma.campaign.findMany({
       where: { configuredStatus: status || undefined, hidden: false, lastSeenSyncRunId: { not: null } },
       distinct: ['platformId'],
       orderBy: [{ platformId: 'asc' }, { lastSyncAt: 'desc' }]
     });
 
-    const metricRows = await this.prisma.metricsDaily.findMany({
-      where: { entityType: EntityType.CAMPAIGN, platformId: { in: rows.map((r) => r.platformId) } },
-      orderBy: { metricDate: 'desc' }
+    const account = await this.prisma.adAccount.findFirst();
+    const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 86400000);
+    const toDate = to ? new Date(to) : new Date();
+
+    const metrics = await this.prisma.metricsDaily.findMany({
+      where: {
+        entityType: EntityType.CAMPAIGN,
+        platformId: { in: rows.map((r) => r.platformId) },
+        timezone: account?.timezone,
+        dateLocal: { gte: fromDate, lte: toDate }
+      }
     });
 
-    const latestMetricByPlatform = new Map<string, (typeof metricRows)[number]>();
-    for (const metric of metricRows) {
-      if (!latestMetricByPlatform.has(metric.platformId)) latestMetricByPlatform.set(metric.platformId, metric);
-    }
+    const spendByCampaign = new Map<string, number>();
+    for (const m of metrics) spendByCampaign.set(m.platformId, (spendByCampaign.get(m.platformId) ?? 0) + m.spendCents);
 
     const validation = validateUniquePlatforms(rows.map((r) => r.platformId));
-    console.log('[ads-manager] campaign list validation', validation);
+    console.log('[ads-manager] campaign unique validation', validation);
 
-    return rows.map((c) => {
-      const metric = latestMetricByPlatform.get(c.platformId);
-      const spendCents = metric ? metric.spendCents : 0;
-      if (spendCents === 0) console.log(`[ads-manager] spend is zero from insights for campaign ${c.platformId}`);
-      return {
-        ...c,
-        spendCents,
-        budgetDebug: { cents: c.dailyBudgetCents, sourceUnit: c.budgetSourceUnit }
-      };
-    });
+    return rows.map((c) => ({
+      ...c,
+      spendCents: spendByCampaign.get(c.platformId) ?? 0,
+      budgetDisplay: c.dailyBudgetCents / 100,
+      budgetDebug: { cents: c.dailyBudgetCents, sourceUnit: c.budgetSourceUnit }
+    }));
   }
 
   @Get('ads-manager/adsets')
-  adsets() {
-    return this.prisma.adSet.findMany({ where: { hidden: false }, distinct: ['platformId'], orderBy: { platformId: 'asc' } });
-  }
+  adsets() { return this.prisma.adSet.findMany({ where: { hidden: false }, distinct: ['platformId'], orderBy: { platformId: 'asc' } }); }
 
   @Get('ads-manager/ads')
-  ads() {
-    return this.prisma.ad.findMany({ where: { hidden: false }, distinct: ['platformId'], orderBy: { platformId: 'asc' } });
-  }
+  ads() { return this.prisma.ad.findMany({ where: { hidden: false }, distinct: ['platformId'], orderBy: { platformId: 'asc' } }); }
 
   @Get('ads-manager/validations')
   async validations() {
@@ -229,7 +328,7 @@ export class AppController {
       return { error: 'No posts available. Please create a new ad post from Content Source.' };
     }
     const merchant = await this.prisma.merchant.findFirstOrThrow();
-    const account = await this.prisma.adAccount.findFirstOrThrow();
+    const account = await this.prisma.adAccount.findFirstOrThrow({ where: { merchantId: merchant.id } });
     const budget = normalizeBudgetToCents(body.budget ?? 100, body.budgetUnit as BudgetSourceUnit | undefined);
 
     const campaign = await this.prisma.campaign.create({
@@ -241,11 +340,11 @@ export class AppController {
         deliveryStatus: body.status === 'PAUSED' ? 'Inactive' : 'Active',
         dailyBudgetCents: budget.cents,
         budgetSourceUnit: budget.unit,
-        spendCents: 0,
         startDate: new Date(),
         objective: body.optimizationGoal || 'Conversions',
         merchantId: merchant.id,
         adAccountId: account.id,
+        sellpageId: body.sellpageId,
         lastSyncAt: new Date(),
         hidden: false
       }
@@ -259,7 +358,6 @@ export class AppController {
         effectiveStatus: campaign.effectiveStatus,
         deliveryStatus: campaign.deliveryStatus,
         budgetCents: budget.cents,
-        spendCents: 0,
         merchantId: merchant.id,
         campaignId: campaign.id,
         hidden: false
@@ -273,7 +371,6 @@ export class AppController {
         configuredStatus: campaign.configuredStatus,
         effectiveStatus: campaign.effectiveStatus,
         deliveryStatus: campaign.deliveryStatus,
-        spendCents: 0,
         merchantId: merchant.id,
         adSetId: adset.id,
         hidden: false
