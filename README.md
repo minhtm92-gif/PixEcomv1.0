@@ -66,3 +66,5 @@ Demo credentials:
 Notes:
 - Corepack is disabled in the dev container flow.
 - `pnpm@9` is installed via npm to avoid Corepack proxy/tunneling issues.
+
+Docker note: the API image uses `node:20-bookworm-slim` with OpenSSL installed to ensure Prisma generate/migrate works reliably in container builds.
