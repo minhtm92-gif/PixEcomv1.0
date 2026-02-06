@@ -1,0 +1,14 @@
+{
+  "name": "pixecom-monorepo",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "db:migrate": "pnpm --filter api prisma migrate deploy",
+    "db:seed": "pnpm --filter api prisma db seed",
+    "dev:up": "docker compose up -d --build",
+    "dev:down": "docker compose down -v",
+    "dev:logs": "docker compose logs -f --tail=200",
+    "dev:seed": "pnpm db:migrate && pnpm db:seed"
+  }
+}
