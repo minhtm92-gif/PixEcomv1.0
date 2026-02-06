@@ -1,3 +1,4 @@
+# Docker images install pnpm internally; host does not need pnpm
 services:
   postgres:
     image: postgres:16
