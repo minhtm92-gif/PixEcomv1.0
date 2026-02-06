@@ -1,12 +1,14 @@
-import { PrismaClient, Role, Status, AssetType } from '@prisma/client';
+import { PrismaClient, Role, Status, AssetType, EntityType, BudgetSourceUnit } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
+  await prisma.metricsDaily.deleteMany();
   await prisma.ad.deleteMany();
   await prisma.adSet.deleteMany();
   await prisma.campaign.deleteMany();
+  await prisma.syncRun.deleteMany();
   await prisma.order.deleteMany();
   await prisma.creativeAsset.deleteMany();
   await prisma.sellpage.deleteMany();
@@ -18,17 +20,11 @@ async function main() {
   const merchant = await prisma.merchant.create({ data: { name: 'Demo Merchant' } });
   const passwordHash = await bcrypt.hash('Admin@12345', 10);
   await prisma.user.create({
-    data: {
-      email: 'admin@pixecom.local',
-      passwordHash,
-      name: 'Admin User',
-      role: Role.ADMIN,
-      merchantId: merchant.id
-    }
+    data: { email: 'admin@pixecom.local', passwordHash, name: 'Admin User', role: Role.ADMIN, merchantId: merchant.id }
   });
 
   const p1 = await prisma.product.create({ data: { code: 'PX-001', name: 'Slim Shaper', merchantId: merchant.id, status: Status.ACTIVE } });
-  const p2 = await prisma.product.create({ data: { code: 'PX-002', name: 'Sleep Patch', merchantId: merchant.id, status: Status.ACTIVE } });
+  await prisma.product.create({ data: { code: 'PX-002', name: 'Sleep Patch', merchantId: merchant.id, status: Status.ACTIVE } });
   const sp = await prisma.sellpage.create({ data: { slug: 'slim-shaper', domain: 'slim.demo.local', productId: p1.id, merchantId: merchant.id, config: { theme: 'dark' } } });
 
   for (const source of ['Facebook', 'Pinterest', 'Google', 'Applovin']) {
@@ -47,21 +43,45 @@ async function main() {
   }
 
   const account = await prisma.adAccount.create({ data: { platformId: 'act_10001', name: 'Main FB Account', currency: 'USD', timezone: 'UTC', merchantId: merchant.id } });
+  const syncRun = await prisma.syncRun.create({ data: { merchantId: merchant.id, source: 'facebook', status: 'success', finishedAt: new Date() } });
+  const metricDate = new Date();
+  metricDate.setUTCHours(0, 0, 0, 0);
 
   for (let i = 1; i <= 5; i++) {
+    const configuredStatus = i % 2 ? Status.ACTIVE : Status.PAUSED;
+    const effectiveStatus = configuredStatus;
     const campaign = await prisma.campaign.create({
       data: {
         platformId: `cmp_${i}`,
         name: `Campaign ${i}`,
-        status: i % 2 ? Status.ACTIVE : Status.PAUSED,
-        deliveryStatus: i % 2 ? 'Active' : 'Inactive',
-        dailyBudgetCents: 5000 * i,
-        spendCents: 2300 * i,
+        configuredStatus,
+        effectiveStatus,
+        deliveryStatus: configuredStatus === Status.ACTIVE ? 'Active' : 'Inactive',
+        dailyBudgetCents: 8000,
+        budgetSourceUnit: BudgetSourceUnit.MINOR,
+        spendCents: i === 2 ? 0 : 2300 * i,
         startDate: new Date(),
         objective: 'Conversions',
         merchantId: merchant.id,
         adAccountId: account.id,
-        lastSyncAt: new Date()
+        lastSyncAt: new Date(),
+        lastSeenSyncRunId: syncRun.id,
+        hidden: false
+      }
+    });
+
+    await prisma.metricsDaily.create({
+      data: {
+        entityType: EntityType.CAMPAIGN,
+        platformId: campaign.platformId,
+        metricDate,
+        timezone: account.timezone,
+        spendCents: i === 2 ? 0 : 2300 * i,
+        impressions: 2000 * i,
+        clicks: 100 * i,
+        roas: 1.4 + i / 10,
+        cpm: 9 + i,
+        ctr: 2 + i / 10
       }
     });
 
@@ -69,26 +89,52 @@ async function main() {
       data: {
         platformId: `adset_${i}`,
         name: `Ad Set ${i}`,
-        status: campaign.status,
-        deliveryStatus: campaign.deliveryStatus,
+        configuredStatus,
+        effectiveStatus,
+        deliveryStatus: configuredStatus === Status.ACTIVE ? 'Active' : 'Inactive',
         budgetCents: 3000 * i,
-        spendCents: 1300 * i,
+        spendCents: i === 2 ? 0 : 1300 * i,
         merchantId: merchant.id,
         campaignId: campaign.id,
-        targeting: { location: 'US', age: '18-45' }
+        targeting: { location: 'US', age: '18-45' },
+        lastSeenSyncRunId: syncRun.id,
+        hidden: false
       }
     });
 
-    await prisma.ad.create({
+    await prisma.metricsDaily.create({
+      data: {
+        entityType: EntityType.ADSET,
+        platformId: adset.platformId,
+        metricDate,
+        timezone: account.timezone,
+        spendCents: i === 2 ? 0 : 1300 * i
+      }
+    });
+
+    const ad = await prisma.ad.create({
       data: {
         platformId: `ad_${i}`,
         name: `Ad ${i}`,
-        status: campaign.status,
-        deliveryStatus: campaign.deliveryStatus,
-        spendCents: 1100 * i,
+        configuredStatus,
+        effectiveStatus,
+        deliveryStatus: configuredStatus === Status.ACTIVE ? 'Active' : 'Inactive',
+        spendCents: i === 2 ? 0 : 1100 * i,
         merchantId: merchant.id,
         adSetId: adset.id,
-        metrics: { roas: 1.5 + i / 10, ctr: 2 + i / 10, cpm: 8.2 + i }
+        metrics: { roas: 1.5 + i / 10, ctr: 2 + i / 10, cpm: 8.2 + i },
+        lastSeenSyncRunId: syncRun.id,
+        hidden: false
+      }
+    });
+
+    await prisma.metricsDaily.create({
+      data: {
+        entityType: EntityType.AD,
+        platformId: ad.platformId,
+        metricDate,
+        timezone: account.timezone,
+        spendCents: i === 2 ? 0 : 1100 * i
       }
     });
   }

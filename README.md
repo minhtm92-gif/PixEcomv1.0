@@ -39,3 +39,10 @@ This installs pnpm directly via npm and avoids Corepack-managed package manager 
 
 ## Demo Credentials
 - `admin@pixecom.local` / `Admin@12345`
+
+## Ads Manager Data Integrity Notes
+- Campaign list endpoint reads from the `Campaign` table only and returns one row per `platformId` (`distinct`) to prevent phantom duplicates.
+- Campaign toggle updates `configuredStatus`; delivery/effective runtime state is tracked in `effectiveStatus` and `deliveryStatus`.
+- Sync now records `SyncRun` rows and marks entities not seen in the current sync as `hidden`.
+- Daily spend is read from `MetricsDaily` keyed by `(entityType, platformId, metricDate, timezone)` and does not derive campaign spend from child entities.
+- Budgets are stored in cents with normalization logic and `budgetSourceUnit` retained for debugging major/minor source units.
