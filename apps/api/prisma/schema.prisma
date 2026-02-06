@@ -7,13 +7,42 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role { ADMIN LEADER MEDIA VIEWER }
-enum Status { ACTIVE PAUSED ARCHIVED }
-enum AssetType { VIDEO IMAGE THUMBNAIL ADTEXT ADPOST }
-enum DraftSource { EXISTING_POST CONTENT_SOURCE }
-enum EntityType { CAMPAIGN ADSET AD }
-enum BudgetSourceUnit { MAJOR MINOR }
-enum PaymentStatus { PENDING PAID FAILED }
+enum Role {
+  ADMIN
+  LEADER
+  MEDIA
+  VIEWER
+}
+enum Status {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+enum AssetType {
+  VIDEO
+  IMAGE
+  THUMBNAIL
+  ADTEXT
+  ADPOST
+}
+enum DraftSource {
+  EXISTING_POST
+  CONTENT_SOURCE
+}
+enum EntityType {
+  CAMPAIGN
+  ADSET
+  AD
+}
+enum BudgetSourceUnit {
+  MAJOR
+  MINOR
+}
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
 
 model Merchant {
   id         String    @id @default(cuid())
