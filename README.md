@@ -46,3 +46,23 @@ This installs pnpm directly via npm and avoids Corepack-managed package manager 
 - Sync now records `SyncRun` rows and marks entities not seen in the current sync as `hidden`.
 - Daily spend is read from `MetricsDaily` keyed by `(entityType, platformId, metricDate, timezone)` and does not derive campaign spend from child entities.
 - Budgets are stored in cents with normalization logic and `budgetSourceUnit` retained for debugging major/minor source units.
+
+## Run on GitHub Codespaces
+1. Open the repository on GitHub.
+2. Click **Code** → **Codespaces** → **Create codespace on main** (or current branch).
+3. In the Codespaces terminal run:
+   ```bash
+   pnpm install
+   pnpm dev:up
+   pnpm dev:seed
+   ```
+4. Open the **Ports** tab and access:
+   - Web: http://localhost:3000
+   - API: http://localhost:4000 (`/api` for Swagger if enabled)
+
+Demo credentials:
+- `admin@pixecom.local` / `Admin@12345`
+
+Notes:
+- Corepack is disabled in the dev container flow.
+- `pnpm@9` is installed via npm to avoid Corepack proxy/tunneling issues.

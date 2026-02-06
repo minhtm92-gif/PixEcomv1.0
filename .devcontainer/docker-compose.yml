@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+  dev:
+    image: mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
+    command: sleep infinity
+    volumes:
+      - ..:/workspaces/pixecom:cached
+    working_dir: /workspaces/pixecom
+    init: true
